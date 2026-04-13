@@ -1,0 +1,116 @@
+{
+  "name": "copilot-approval-guard",
+  "displayName": "Copilot Approval Guard",
+  "description": "Review and remove auto-approved commands for GitHub Copilot and Claude Code. Does not add entries — only audits and removes them.",
+  "version": "0.1.0",
+  "publisher": "pettll",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pettll/copilot-approval-guard"
+  },
+  "icon": "media/icon.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "approvalGuard",
+          "title": "Copilot Approval Guard",
+          "icon": "media/shield.svg"
+        }
+      ]
+    },
+    "views": {
+      "approvalGuard": [
+        {
+          "id": "approvalGuard.approvals",
+          "name": "Auto-Approved Commands",
+          "when": "true"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "approvalGuard.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)",
+        "category": "Approval Guard"
+      },
+      {
+        "command": "approvalGuard.removeEntry",
+        "title": "Remove Entry",
+        "icon": "$(trash)",
+        "category": "Approval Guard"
+      },
+      {
+        "command": "approvalGuard.removeAllFromScope",
+        "title": "Remove All from This Scope",
+        "icon": "$(clear-all)",
+        "category": "Approval Guard"
+      },
+      {
+        "command": "approvalGuard.removeDbEntry",
+        "title": "Disable MCP Server",
+        "icon": "$(trash)",
+        "category": "Approval Guard"
+      },
+      {
+        "command": "approvalGuard.removeDbToolEntry",
+        "title": "Remove Tool Approval",
+        "icon": "$(trash)",
+        "category": "Approval Guard"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "approvalGuard.refresh",
+          "when": "view == approvalGuard.approvals",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "approvalGuard.removeEntry",
+          "when": "view == approvalGuard.approvals && (viewItem == entry || viewItem == approveAll)",
+          "group": "inline"
+        },
+        {
+          "command": "approvalGuard.removeAllFromScope",
+          "when": "view == approvalGuard.approvals && viewItem == scopeGroup",
+          "group": "inline"
+        },
+        {
+          "command": "approvalGuard.removeDbEntry",
+          "when": "view == approvalGuard.approvals && viewItem == dbEntry",
+          "group": "inline"
+        },
+        {
+          "command": "approvalGuard.removeDbToolEntry",
+          "when": "view == approvalGuard.approvals && viewItem == dbToolEntry",
+          "group": "inline"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}

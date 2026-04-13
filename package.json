@@ -2,7 +2,7 @@
   "name": "copilot-approval-guard",
   "displayName": "Copilot Approval Guard",
   "description": "Review and remove auto-approved commands for GitHub Copilot and Claude Code. Does not add entries — only audits and removes them.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "pettll",
   "license": "MIT",
   "repository": {

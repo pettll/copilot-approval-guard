@@ -467,12 +467,12 @@ class ApprovalTreeProvider implements vscode.TreeDataProvider<ApprovalItem> {
     if (!element) {
       return this.buildRoots();
     }
+    if (element.kind === "claudeRoot") {
+      return this.getChildren_claudeRoot();
+    }
     if (element.kind === "root") {
       if (element.fullKey === "mcp/selectedTools") {
         return this.buildMcpServerItems();
-      }
-      if (element.fullKey === "claude/permissions") {
-        return this.getChildren_claudeRoot();
       }
       if (element.fullKey) {
         return this.buildScopeGroups(element.fullKey);

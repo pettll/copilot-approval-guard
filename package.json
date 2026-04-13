@@ -69,6 +69,12 @@
         "title": "Remove Tool Approval",
         "icon": "$(trash)",
         "category": "Approval Guard"
+      },
+      {
+        "command": "approvalGuard.removeClaudeEntry",
+        "title": "Remove Permission",
+        "icon": "$(trash)",
+        "category": "Approval Guard"
       }
     ],
     "menus": {
@@ -98,6 +104,11 @@
         {
           "command": "approvalGuard.removeDbToolEntry",
           "when": "view == approvalGuard.approvals && viewItem == dbToolEntry",
+          "group": "inline"
+        },
+        {
+          "command": "approvalGuard.removeClaudeEntry",
+          "when": "view == approvalGuard.approvals && viewItem == claudeEntry",
           "group": "inline"
         }
       ]

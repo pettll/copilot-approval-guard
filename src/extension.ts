@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 import { execFileSync } from "child_process";
 import * as path from "path";
+import * as os from "os";
+import * as fs from "fs";
 
 // ── Risk patterns ─────────────────────────────────────────────────────────────
 
@@ -236,6 +238,61 @@ function formatMcpLabel(key: string): string {
   return key.replace(/^mcp\.config\./, "");
 }
 
+// ── Claude Code settings (.claude/settings*.json) ────────────────────────────
+
+interface ClaudePermissions {
+  allow?: string[];
+  deny?: string[];
+}
+
+interface ClaudeSettings {
+  permissions?: ClaudePermissions;
+}
+
+interface ClaudeSettingsSource {
+  filePath: string;
+  label: string;
+}
+
+function readClaudeSettings(filePath: string): ClaudeSettings {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8")) as ClaudeSettings;
+  } catch {
+    return {};
+  }
+}
+
+function writeClaudeSettings(filePath: string, data: ClaudeSettings): void {
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n", "utf8");
+}
+
+function getClaudeSettingsSources(): ClaudeSettingsSource[] {
+  const sources: ClaudeSettingsSource[] = [];
+  const home = os.homedir();
+
+  for (const filename of ["settings.json", "settings.local.json"]) {
+    const filePath = path.join(home, ".claude", filename);
+    if (fs.existsSync(filePath)) {
+      sources.push({ filePath, label: `~/.claude/${filename}` });
+    }
+  }
+
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    for (const filename of ["settings.json", "settings.local.json"]) {
+      const filePath = path.join(folder.uri.fsPath, ".claude", filename);
+      if (fs.existsSync(filePath)) {
+        const prefix =
+          (vscode.workspace.workspaceFolders?.length ?? 0) > 1
+            ? `${path.basename(folder.uri.fsPath)}/`
+            : "";
+        sources.push({ filePath, label: `${prefix}.claude/${filename}` });
+      }
+    }
+  }
+
+  return sources;
+}
+
 // ── Monitored settings keys ───────────────────────────────────────────────────
 
 /**
@@ -278,7 +335,10 @@ type ItemKind =
   | "entry"
   | "placeholder"
   | "dbEntry"
-  | "dbToolEntry";
+  | "dbToolEntry"
+  | "claudeRoot"
+  | "claudeFile"
+  | "claudeEntry";
 
 class ApprovalItem extends vscode.TreeItem {
   constructor(
@@ -347,6 +407,42 @@ class ApprovalItem extends vscode.TreeItem {
       case "dbToolEntry":
         this.iconPath = new vscode.ThemeIcon("tools");
         break;
+
+      case "claudeRoot":
+        this.iconPath = new vscode.ThemeIcon("robot");
+        break;
+
+      case "claudeFile":
+        this.iconPath = new vscode.ThemeIcon("json");
+        break;
+
+      case "claudeEntry":
+        if (risk) {
+          const iconByLevel: Record<RiskAssessment["level"], string> = {
+            high: "error",
+            medium: "warning",
+            low: "info",
+            safe: "check",
+          };
+          const colorByLevel: Record<RiskAssessment["level"], string> = {
+            high: "errorForeground",
+            medium: "editorWarning.foreground",
+            low: "editorInfo.foreground",
+            safe: "terminal.ansiGreen",
+          };
+          this.iconPath = new vscode.ThemeIcon(
+            iconByLevel[risk.level],
+            new vscode.ThemeColor(colorByLevel[risk.level]),
+          );
+          this.description =
+            risk.level !== "safe" ? risk.level.toUpperCase() : undefined;
+          this.tooltip = new vscode.MarkdownString(
+            risk.reason
+              ? `**Risk:** ${risk.level.toUpperCase()}  \n**Reason:** ${risk.reason}  \n\n\`${entryKey}\``
+              : `\`${entryKey}\``,
+          );
+        }
+        break;
     }
   }
 }
@@ -375,6 +471,9 @@ class ApprovalTreeProvider implements vscode.TreeDataProvider<ApprovalItem> {
       if (element.fullKey === "mcp/selectedTools") {
         return this.buildMcpServerItems();
       }
+      if (element.fullKey === "claude/permissions") {
+        return this.getChildren_claudeRoot();
+      }
       if (element.fullKey) {
         return this.buildScopeGroups(element.fullKey);
       }
@@ -389,6 +488,10 @@ class ApprovalTreeProvider implements vscode.TreeDataProvider<ApprovalItem> {
     // Expand MCP server node → show its individual tool approvals
     if (element.kind === "dbEntry" && element.dbKey) {
       return this.buildMcpToolEntries(element.dbKey);
+    }
+    // Expand Claude Code settings file node → show its permission entries
+    if (element.kind === "claudeFile" && element.fullKey) {
+      return this.buildClaudeEntries(element.fullKey);
     }
     return [];
   }
@@ -440,6 +543,12 @@ class ApprovalTreeProvider implements vscode.TreeDataProvider<ApprovalItem> {
       }
 
       roots.push(item);
+    }
+
+    // Append Claude Code permission files
+    const claudeRoot = this.buildClaudeRoot();
+    if (claudeRoot) {
+      roots.push(claudeRoot);
     }
 
     if (roots.length === 0) {
@@ -539,6 +648,136 @@ class ApprovalTreeProvider implements vscode.TreeDataProvider<ApprovalItem> {
         risk,
       );
     });
+  }
+
+  // ── Claude Code settings (.claude/settings*.json) ────────────────────────
+
+  private buildClaudeRoot(): ApprovalItem | undefined {
+    const sources = getClaudeSettingsSources();
+    if (sources.length === 0) {
+      return undefined;
+    }
+
+    let totalEntries = 0;
+    let hasHighRisk = false;
+    for (const { filePath } of sources) {
+      const data = readClaudeSettings(filePath);
+      const allow = data.permissions?.allow ?? [];
+      const deny = data.permissions?.deny ?? [];
+      totalEntries += allow.length + deny.length;
+      if (allow.some((e) => assessRisk(e).level === "high")) {
+        hasHighRisk = true;
+      }
+    }
+
+    if (totalEntries === 0) {
+      return undefined;
+    }
+
+    const item = new ApprovalItem(
+      "Claude Code Permissions",
+      vscode.TreeItemCollapsibleState.Expanded,
+      "claudeRoot",
+      "claude/permissions",
+    );
+    item.description = `${totalEntries} ${totalEntries === 1 ? "entry" : "entries"}`;
+    if (hasHighRisk) {
+      item.iconPath = new vscode.ThemeIcon(
+        "warning",
+        new vscode.ThemeColor("editorWarning.foreground"),
+      );
+    }
+    item.tooltip = "Permissions from .claude/settings*.json files";
+    return item;
+  }
+
+  getChildren_claudeRoot(): ApprovalItem[] {
+    const sources = getClaudeSettingsSources();
+    if (sources.length === 0) {
+      return [
+        new ApprovalItem(
+          "(no .claude/settings files found)",
+          vscode.TreeItemCollapsibleState.None,
+          "placeholder",
+        ),
+      ];
+    }
+
+    return sources.map(({ filePath, label }) => {
+      const data = readClaudeSettings(filePath);
+      const allow = data.permissions?.allow ?? [];
+      const deny = data.permissions?.deny ?? [];
+      const count = allow.length + deny.length;
+
+      const item = new ApprovalItem(
+        label,
+        count > 0
+          ? vscode.TreeItemCollapsibleState.Expanded
+          : vscode.TreeItemCollapsibleState.None,
+        "claudeFile",
+        filePath,
+      );
+      item.description =
+        count > 0
+          ? `${count} ${count === 1 ? "entry" : "entries"}`
+          : "empty";
+      item.tooltip = new vscode.MarkdownString(`**Path:** \`${filePath}\``);
+      return item;
+    });
+  }
+
+  private buildClaudeEntries(filePath: string): ApprovalItem[] {
+    const data = readClaudeSettings(filePath);
+    const allow = data.permissions?.allow ?? [];
+    const deny = data.permissions?.deny ?? [];
+
+    const items: ApprovalItem[] = [];
+
+    for (const entry of allow) {
+      const risk = assessRisk(entry);
+      const item = new ApprovalItem(
+        entry,
+        vscode.TreeItemCollapsibleState.None,
+        "claudeEntry",
+        filePath,
+        undefined,
+        entry,
+        risk,
+        "allow",
+      );
+      items.push(item);
+    }
+
+    for (const entry of deny) {
+      const item = new ApprovalItem(
+        entry,
+        vscode.TreeItemCollapsibleState.None,
+        "claudeEntry",
+        filePath,
+        undefined,
+        entry,
+        { level: "safe" },
+        "deny",
+      );
+      item.description = "DENY";
+      item.iconPath = new vscode.ThemeIcon(
+        "circle-slash",
+        new vscode.ThemeColor("errorForeground"),
+      );
+      items.push(item);
+    }
+
+    if (items.length === 0) {
+      return [
+        new ApprovalItem(
+          "(empty)",
+          vscode.TreeItemCollapsibleState.None,
+          "placeholder",
+        ),
+      ];
+    }
+
+    return items;
   }
 
   // ── MCP servers (from state.vscdb) ────────────────────────────────────────
@@ -735,6 +974,52 @@ async function removeAllFromScope(item: ApprovalItem): Promise<void> {
     .update(item.fullKey, undefined, item.configTarget);
 }
 
+// ── Claude Code permission removal ───────────────────────────────────────────
+
+async function removeClaudeEntry(item: ApprovalItem): Promise<void> {
+  if (!item.fullKey || !item.entryKey || !item.dbKey) {
+    return;
+  }
+
+  const listType = item.dbKey as "allow" | "deny";
+  const pick = await vscode.window.showWarningMessage(
+    `Remove "${item.entryKey}" from ${listType} list in ${path.basename(item.fullKey)}?`,
+    { modal: true },
+    "Remove",
+  );
+  if (pick !== "Remove") {
+    return;
+  }
+
+  const data = readClaudeSettings(item.fullKey);
+  if (!data.permissions) {
+    return;
+  }
+
+  const list = data.permissions[listType];
+  if (!list) {
+    return;
+  }
+
+  const idx = list.indexOf(item.entryKey);
+  if (idx === -1) {
+    return;
+  }
+
+  list.splice(idx, 1);
+  if (list.length === 0) {
+    delete data.permissions[listType];
+  }
+  if (
+    !data.permissions.allow?.length &&
+    !data.permissions.deny?.length
+  ) {
+    delete data.permissions;
+  }
+
+  writeClaudeSettings(item.fullKey, data);
+}
+
 // ── Startup risk scan ─────────────────────────────────────────────────────────
 
 async function removeDbEntry(
@@ -841,6 +1126,19 @@ async function scanForRiskyEntries(): Promise<void> {
     }
   }
 
+  // Also scan Claude Code settings files
+  for (const { filePath, label } of getClaudeSettingsSources()) {
+    const data = readClaudeSettings(filePath);
+    for (const entry of data.permissions?.allow ?? []) {
+      const risk = assessRisk(entry);
+      if (risk.level === "high") {
+        highRiskFound.push(
+          `Claude Code [${label}]: "${entry}" — ${risk.reason ?? ""}`,
+        );
+      }
+    }
+  }
+
   if (highRiskFound.length > 0) {
     const plural = highRiskFound.length > 1 ? "s" : "";
     const action = await vscode.window.showWarningMessage(
@@ -905,7 +1203,15 @@ export function activate(context: vscode.ExtensionContext): void {
       },
     ),
 
-    // Auto-refresh when any monitored setting changes
+    vscode.commands.registerCommand(
+      "approvalGuard.removeClaudeEntry",
+      async (item: ApprovalItem) => {
+        await removeClaudeEntry(item);
+        provider.refresh();
+      },
+    ),
+
+    // Auto-refresh when any monitored VS Code setting changes
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (
         MONITORED_KEYS.some(({ fullKey }) => e.affectsConfiguration(fullKey))
@@ -913,7 +1219,18 @@ export function activate(context: vscode.ExtensionContext): void {
         provider.refresh();
       }
     }),
+
   );
+
+  // Auto-refresh when .claude/settings*.json files change (not disposable via push)
+  const claudeWatcher = vscode.workspace.createFileSystemWatcher(
+    "**/.claude/settings{,.local}.json",
+  );
+  const refreshOnClaudeChange = () => provider.refresh();
+  claudeWatcher.onDidChange(refreshOnClaudeChange);
+  claudeWatcher.onDidCreate(refreshOnClaudeChange);
+  claudeWatcher.onDidDelete(refreshOnClaudeChange);
+  context.subscriptions.push(claudeWatcher);
 
   void scanForRiskyEntries();
 }
